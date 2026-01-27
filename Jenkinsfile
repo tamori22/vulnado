@@ -1,139 +1,123 @@
 pipeline {
-    agent any
+  agent any
 
-    options {
-        timestamps()
-        ansiColor('xterm')
-        disableConcurrentBuilds()
-        timeout(time: 1, unit: 'HOURS')
-        buildDiscarder(logRotator(daysToKeepStr: '7', numToKeepStr: '50'))
+  options {
+    timestamps()
+    ansiColor('xterm')
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    COMPOSE_PROJECT_NAME = "vulnado"
+    VULNADO_URL = "http://localhost:8081"
+    CLIENT_URL  = "http://localhost:1337"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git rev-parse --short HEAD'
+      }
     }
 
-    parameters {
-        booleanParam(name: 'BUILD',  defaultValue: true, description: 'Build project (mvn package)')
-        booleanParam(name: 'TEST',   defaultValue: true, description: 'Run tests (mvn test)')
-        booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy via docker compose up -d --build')
-        booleanParam(name: 'DOWN',   defaultValue: false, description: 'docker compose down at the end')
+    stage('Docker sanity') {
+      steps {
+        sh '''
+          set -eux
+          whoami
+          id
+          echo "PATH=$PATH"
+          docker version
+          docker compose version
+        '''
+      }
     }
 
-    environment {
-        MVN = "./mvnw"
-        COMPOSE_FILE = "docker-compose.yml"
-        // если нужно, можно переопределить имя проекта compose
-        COMPOSE_PROJECT_NAME = "vulnado"
+    stage('Gitleaks') {
+      steps {
+        sh '''
+          set -eux
+          # Gitleaks через docker (не требует установки в Jenkins)
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:latest detect --source . --verbose
+        '''
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                PrintStage()
-                checkout scm
-                sh 'ls -la'
-            }
-        }
-
-        stage('Gitleaks') {
-            steps {
-                PrintStage("Running Gitleaks secret scan (Docker)")
-                sh '''
-                  set -e
-                  docker version >/dev/null 2>&1 || (echo "Docker is not available for Jenkins user" && exit 1)
-
-                  docker run --rm \
-                    -v "$PWD:/repo" \
-                    -w /repo \
-                    zricethezav/gitleaks:latest detect \
-                      --source . --verbose --redact --exit-code 1 \
-                      --report-format sarif --report-path gitleaks.sarif
-                '''
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'gitleaks.sarif', allowEmptyArchive: true
-                }
-            }
-        }
-
-        stage('Build') {
-            when { expression { return params.BUILD } }
-            steps {
-                PrintStage()
-                sh '''
-                  set -e
-                  chmod +x ./mvnw
-                  ./mvnw -B -DskipTests clean package
-                '''
-            }
-        }
-
-        stage('Test') {
-            when { expression { return params.TEST } }
-            steps {
-                PrintStage()
-                sh '''
-                  set -e
-                  chmod +x ./mvnw
-                  ./mvnw -B test
-                '''
-            }
-        }
-
-        stage('Docker Compose Deploy') {
-            when { expression { return params.DEPLOY } }
-            steps {
-                PrintStage("Deploying via Docker Compose")
-                sh '''
-                  set -e
-
-                  # покажем итоговый конфиг (очень помогает дебажить)
-                  docker compose -f "${COMPOSE_FILE}" config
-
-                  # сборка и запуск
-                  docker compose -f "${COMPOSE_FILE}" up -d --build
-
-                  echo "=== docker compose ps ==="
-                  docker compose -f "${COMPOSE_FILE}" ps
-                '''
-            }
-        }
-
-        stage('Archive') {
-            when { expression { return params.BUILD } }
-            steps {
-                PrintStage("Archiving build artifacts")
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true, allowEmptyArchive: true
-            }
-        }
-    }
-
-    post {
+    stage('Build & Test (Maven)') {
+      steps {
+        sh '''
+          set -eux
+          # Если в репе есть mvnw — лучше использовать его
+          if [ -f "./mvnw" ]; then
+            chmod +x ./mvnw
+            ./mvnw -q -DskipTests=false test
+          else
+            # fallback если mvnw нет
+            mvn -q -DskipTests=false test
+          fi
+        '''
+      }
+      post {
         always {
-            junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
-
-            script {
-                currentBuild.result = currentBuild.result ?: 'SUCCESS'
-                echo "Pipeline finished with status: ${currentBuild.result}"
-            }
+          junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
         }
-
-        cleanup {
-            script {
-                if (params.DOWN) {
-                    echo "Bringing stack down (DOWN=true)"
-                    sh '''
-                      set +e
-                      docker compose -f "${COMPOSE_FILE}" down --remove-orphans
-                    '''
-                }
-            }
-        }
+      }
     }
+
+    stage('Compose Deploy') {
+      steps {
+        sh '''
+          set -eux
+          # На всякий случай прибираем старое
+          docker compose down --remove-orphans || true
+
+          # Собираем и поднимаем
+          docker compose up -d --build
+
+          docker compose ps
+        '''
+      }
+    }
+
+    stage('Smoke check') {
+      steps {
+        sh '''
+          set -eux
+
+          echo "Check vulnado: $VULNADO_URL"
+          # 404 на / — ок, поэтому проверяем что сервер отвечает вообще (любым кодом, кроме 000)
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$VULNADO_URL" || true)
+          echo "vulnado http_code=$code"
+          if [ "$code" = "000" ]; then
+            echo "Vulnado не отвечает"
+            exit 1
+          fi
+
+          echo "Check client: $CLIENT_URL"
+          code2=$(curl -s -o /dev/null -w "%{http_code}" "$CLIENT_URL" || true)
+          echo "client http_code=$code2"
+          if [ "$code2" = "000" ]; then
+            echo "Client не отвечает"
+            exit 1
+          fi
+        '''
+      }
+    }
+  }
+
+  post {
+    failure {
+      sh '''
+        set +e
+        echo "=== docker compose ps ==="
+        docker compose ps || true
+
+        echo "=== docker compose logs (last 200 lines) ==="
+        docker compose logs --tail=200 || true
+      '''
+    }
+
+  }
 }
 
-void PrintStage(String text = "") {
-    if (text?.trim()) {
-        println(text)
-    } else {
-        println('* ' * 10 + env.STAGE_NAME.toUpperCase() + ' *' * 10)
-    }
-}
