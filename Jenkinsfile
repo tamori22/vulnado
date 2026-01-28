@@ -9,9 +9,13 @@ pipeline {
 
   parameters {
     booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: 'Запускать gitleaks (если false — пропускаем стадию)')
+    booleanParam(name: 'TEST_GITLEAKS', defaultValue: false, description: 'Создать фейковый секрет в workspace и убедиться, что gitleaks его ловит (секрет НЕ коммитится)')
+    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true,  description: 'Запускать semgrep (если false — пропускаем стадию)')
+
     booleanParam(name: 'DEPLOY',       defaultValue: true,  description: 'Делать docker compose up + smoke-check')
     booleanParam(name: 'CLEANUP',      defaultValue: false, description: 'После билда сделать docker compose down')
     booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: 'Публиковать HTML-отчет (если он существует)')
+
     string(name: 'VULNADO_URL_OVERRIDE', defaultValue: '', description: 'Если задано — использовать этот URL вместо VULNADO_URL')
     string(name: 'CLIENT_URL_OVERRIDE',  defaultValue: '', description: 'Если задано — использовать этот URL вместо CLIENT_URL')
   }
@@ -29,7 +33,20 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'git rev-parse --short HEAD || true'
+        sh '''
+          set -eux
+          echo "WORKSPACE=$WORKSPACE"
+          git rev-parse --short HEAD || true
+          git rev-parse --abbrev-ref HEAD || true
+          git branch --show-current || true
+        '''
+        script {
+          def branch = sh(script: 'git rev-parse --abbrev-ref HEAD || true', returnStdout: true).trim()
+          def sha    = sh(script: 'git rev-parse --short HEAD || true', returnStdout: true).trim()
+          if (!branch) { branch = 'unknown' }
+          if (!sha)    { sha = 'unknown' }
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${branch}@${sha}"
+        }
       }
     }
 
@@ -51,29 +68,56 @@ pipeline {
       steps {
         sh '''
           set -eux
+
+          if [ "${TEST_GITLEAKS}" = "true" ]; then
+            echo "TEST_GITLEAKS enabled: creating fake secret file (NOT committed)"
+            cat > .gitleaks_test_secret.txt <<'EOF'
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+EOF
+          fi
+
+          set +e
           docker run --rm \
-            -v "$PWD:/repo" -w /repo \
+            -v "$WORKSPACE:/repo" -w /repo \
             zricethezav/gitleaks:latest \
             detect --source /repo --no-git --verbose
+          rc=$?
+          set -e
+
+          rm -f .gitleaks_test_secret.txt || true
+
+          if [ "${TEST_GITLEAKS}" = "true" ]; then
+            if [ $rc -ne 0 ]; then
+              echo "OK: gitleaks detected the fake secret (as expected)."
+              exit 0
+            else
+              echo "ERROR: gitleaks did NOT detect the fake secret."
+              exit 1
+            fi
+          fi
+
+          exit $rc
         '''
       }
     }
 
-stage('Semgrep') {
-  steps {
-    sh '''
-      set -eux
-      echo "WORKSPACE=$WORKSPACE"
-      ls -la "$WORKSPACE"
+    stage('Semgrep') {
+      when { expression { return params.RUN_SEMGREP } }
+      steps {
+        sh '''
+          set -eux
+          echo "WORKSPACE=$WORKSPACE"
+          ls -la "$WORKSPACE"
 
-      docker run --rm \
-        -v "$WORKSPACE:/src" \
-        -w /src \
-        returntocorp/semgrep:latest \
-        semgrep scan --config=auto .
-    '''
-  }
-}
+          docker run --rm \
+            -v "$WORKSPACE:/src" \
+            -w /src \
+            returntocorp/semgrep:latest \
+            semgrep scan --config=auto .
+        '''
+      }
+    }
 
     stage('Build & Test (Maven)') {
       steps {
