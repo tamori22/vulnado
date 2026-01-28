@@ -8,16 +8,16 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: 'Запускать gitleaks (если false — пропускаем стадию)')
-    booleanParam(name: 'TEST_GITLEAKS', defaultValue: false, description: 'Создать фейковый секрет в workspace и убедиться, что gitleaks его ловит (секрет НЕ коммитится)')
-    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true,  description: 'Запускать semgrep (если false — пропускаем стадию)')
-    booleanParam(name: 'GITLEAKS_BLOCKING', defaultValue: true, description: 'Если true — gitleaks валит билд при находках, если false — только отчёт')
-    booleanParam(name: 'SEMGREP_BLOCKING',  defaultValue: true, description: 'Если true — semgrep валит билд при находках, если false — только отчёт')
-    booleanParam(name: 'DEPLOY',       defaultValue: true,  description: 'Делать docker compose up + smoke-check')
-    booleanParam(name: 'CLEANUP',      defaultValue: false, description: 'После билда сделать docker compose down')
-    booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: 'Публиковать HTML-отчет (если он существует)')
-    string(name: 'VULNADO_URL_OVERRIDE', defaultValue: '', description: 'Если задано — использовать этот URL вместо VULNADO_URL')
-    string(name: 'CLIENT_URL_OVERRIDE',  defaultValue: '', description: 'Если задано — использовать этот URL вместо CLIENT_URL')
+    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: 'gitleaks ')
+    booleanParam(name: 'TEST_GITLEAKS', defaultValue: false, description: 'Создать фейковый секрет')
+    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true,  description: 'semgrep')
+    booleanParam(name: 'GITLEAKS_BLOCKING', defaultValue: true, description: '')
+    booleanParam(name: 'SEMGREP_BLOCKING',  defaultValue: true, description: '')
+    booleanParam(name: 'DEPLOY',       defaultValue: true,  description: '')
+    booleanParam(name: 'CLEANUP',      defaultValue: false, description: '')
+    booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: '')
+    string(name: 'VULNADO_URL_OVERRIDE', defaultValue: '', description: '')
+    string(name: 'CLIENT_URL_OVERRIDE',  defaultValue: '', description: '')
   }
 
   environment {
@@ -68,14 +68,12 @@ pipeline {
         sh '''
           set -eux
 
-          # (опционально) тестовый секрет
           if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
             cat > "$WORKSPACE/.gitleaks_test_secret.txt" <<'EOF'
 GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz1234
 EOF
           fi
 
-          # gitleaks: всегда генерим json отчёт
           set +e
           docker run --rm \
             -v "$WORKSPACE:/repo" -w /repo \
@@ -87,7 +85,6 @@ EOF
 
           rm -f "$WORKSPACE/.gitleaks_test_secret.txt" || true
 
-          # TEST_GITLEAKS: ожидаем, что gitleaks "упадёт"
           if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
             if [ $rc -ne 0 ]; then
               echo "OK: gitleaks detected the fake secret (as expected)."
@@ -98,7 +95,6 @@ EOF
             fi
           fi
 
-          # Blocking vs Report-only
           if [ "${GITLEAKS_BLOCKING:-true}" = "true" ]; then
             exit $rc
           else
@@ -253,7 +249,7 @@ EOF
         if (params.CLEANUP) {
           sh 'docker compose down --remove-orphans || true'
         } else {
-          echo "CLEANUP=false, оставляю compose окружение поднятым."
+          echo "CLEANUP=false."
         }
       }
     }
