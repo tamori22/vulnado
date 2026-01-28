@@ -1,3 +1,4 @@
+@Library('jenkins-shared') _
 pipeline {
   agent any
 
@@ -24,6 +25,7 @@ pipeline {
     COMPOSE_PROJECT_NAME = "vulnado"
     VULNADO_URL = "http://vulnado:8080"
     CLIENT_URL  = "http://client:80"
+    SEMGREP_APP_TOKEN = credentials('semgrep-app-token')
     HTML_REPORT_DIR   = "target/site"
     HTML_REPORT_INDEX = "index.html"
     HTML_REPORT_NAME  = "Project HTML Report"
@@ -115,35 +117,34 @@ EOF
         '''
       }
     }
-
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
+      script {
+          def rc = 0
+          try {
+            semgrepCi()
+          } catch (e) {
+            rc = 1
+            if (params.SEMGREP_BLOCKING) {
+              throw e
+            } else {
+              echo "SEMGREP_BLOCKING=false => report-only (ignore error): ${e}"
+            }
+          }
+        }
+
         sh '''
           set -eux
-          set +e
-          docker run --rm \
-            -v "$WORKSPACE:/src" -w /src \
-            returntocorp/semgrep:latest \
-            semgrep scan --config=auto --json -o semgrep-report.json .
-          rc=$?
-          set -e
-
           echo "=== AFTER SEMGREP ==="
           echo "PWD=$(pwd)"
           echo "WORKSPACE=$WORKSPACE"
           ls -la "$WORKSPACE" || true
           find "$WORKSPACE" -maxdepth 3 -name '*semgrep*.json' -print -exec ls -la {} \\; || true
-
-          if [ "${SEMGREP_BLOCKING:-true}" = "true" ]; then
-            exit $rc
-          else
-            echo "SEMGREP_BLOCKING=false => report-only (ignore exit code=$rc)"
-            exit 0
-          fi
         '''
       }
     }
+
 
     stage('Build & Test (Maven)') {
       steps {
