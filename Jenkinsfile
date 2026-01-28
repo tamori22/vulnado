@@ -9,8 +9,8 @@ pipeline {
 
   environment {
     COMPOSE_PROJECT_NAME = "vulnado"
-    VULNADO_URL = "http://localhost:8081"
-    CLIENT_URL  = "http://localhost:1337"
+    VULNADO_URL = "http://vulnado:8080"
+    CLIENT_URL  = "http://client:80"
   }
 
   stages {
@@ -38,7 +38,6 @@ pipeline {
       steps {
         sh '''
           set -eux
-          # Gitleaks через docker (не требует установки в Jenkins)
           docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:latest detect --source . --verbose
         '''
       }
@@ -48,12 +47,10 @@ pipeline {
       steps {
         sh '''
           set -eux
-          # Если в репе есть mvnw — лучше использовать его
           if [ -f "./mvnw" ]; then
             chmod +x ./mvnw
             ./mvnw -q -DskipTests=false test
           else
-            # fallback если mvnw нет
             mvn -q -DskipTests=false test
           fi
         '''
@@ -69,12 +66,8 @@ pipeline {
       steps {
         sh '''
           set -eux
-          # На всякий случай прибираем старое
           docker compose down --remove-orphans || true
-
-          # Собираем и поднимаем
           docker compose up -d --build
-
           docker compose ps
         '''
       }
@@ -85,22 +78,24 @@ pipeline {
         sh '''
           set -eux
 
-          echo "Check vulnado: $VULNADO_URL"
-          # 404 на / — ок, поэтому проверяем что сервер отвечает вообще (любым кодом, кроме 000)
-          code=$(curl -s -o /dev/null -w "%{http_code}" "$VULNADO_URL" || true)
-          echo "vulnado http_code=$code"
-          if [ "$code" = "000" ]; then
-            echo "Vulnado не отвечает"
-            exit 1
-          fi
+          wait_url () {
+            url="$1"
+            name="$2"
+            for i in $(seq 1 40); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+              echo "[$name] try=$i code=$code url=$url"
+              if [ "$code" != "000" ]; then
+                echo "[$name] OK (http_code=$code)"
+                return 0
+              fi
+              sleep 3
+            done
+            echo "[$name] NOT RESPONDING"
+            return 1
+          }
 
-          echo "Check client: $CLIENT_URL"
-          code2=$(curl -s -o /dev/null -w "%{http_code}" "$CLIENT_URL" || true)
-          echo "client http_code=$code2"
-          if [ "$code2" = "000" ]; then
-            echo "Client не отвечает"
-            exit 1
-          fi
+          wait_url "$VULNADO_URL" "vulnado"
+          wait_url "$CLIENT_URL"  "client"
         '''
       }
     }
@@ -117,7 +112,5 @@ pipeline {
         docker compose logs --tail=200 || true
       '''
     }
-
   }
 }
-
