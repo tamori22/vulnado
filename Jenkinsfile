@@ -137,27 +137,44 @@ EOF
         }
       }
     }
-
+    stage('Generate HTML report') {
+      steps {
+        sh '''
+          set -eux
+          mkdir -p target/site
+          cat > target/site/index.html <<'EOF'
+          <html>
+            <head><meta charset="utf-8"><title>Vulnado CI Report</title></head>
+            <body style="font-family: Arial;">
+              <h1>Vulnado CI Report</h1>
+              <ul>
+                <li>Build: #${BUILD_NUMBER}</li>
+                <li>Job: ${JOB_NAME}</li>
+                <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
+                <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
+              </ul>
+              <p>JUnit results смотри во вкладке Tests.</p>
+            </body>
+          </html>
+    EOF
+        '''
+      }
+    }
+    
     stage('Publish HTML report') {
       when { expression { return params.PUBLISH_HTML } }
       steps {
-        script {
-          def reportPath = "${env.HTML_REPORT_DIR}/${env.HTML_REPORT_INDEX}"
-          if (fileExists(reportPath)) {
-            publishHTML(target: [
-              allowMissing: false,
-              alwaysLinkToLastBuild: true,
-              keepAll: true,
-              reportDir: env.HTML_REPORT_DIR,
-              reportFiles: env.HTML_REPORT_INDEX,
-              reportName: env.HTML_REPORT_NAME
-            ])
-          } else {
-            echo "HTML report not found at ${reportPath}. Skipping HTML publish."
-          }
-        }
+        publishHTML(target: [
+          allowMissing: true,
+          alwaysLinkToLastBuild: true,
+          keepAll: true,
+          reportDir: 'target/site',
+          reportFiles: 'index.html',
+          reportName: 'CI HTML Report'
+        ])
       }
     }
+
 
     stage('Compose Deploy') {
       when { expression { return params.DEPLOY } }
@@ -216,6 +233,9 @@ EOF
     }
 
     always {
+      archiveArtifacts artifacts: 'target/**/*.jar,target/site/**,**/*gitleaks*.json,**/*semgrep*.json',
+                     fingerprint: true,
+                     allowEmptyArchive: true
       script {
         if (params.CLEANUP) {
           sh 'docker compose down --remove-orphans || true'
