@@ -62,45 +62,51 @@ pipeline {
         '''
       }
     }
+  stage('Gitleaks') {
+    when { expression { return params.RUN_GITLEAKS } }
+    steps {
+      sh '''
+        set -eux
 
-    stage('Gitleaks') {
-      when { expression { return params.RUN_GITLEAKS } }
-      steps {
-        sh '''
-          set -eux
+        echo "PWD=$(pwd)"
+        echo "WORKSPACE=$WORKSPACE"
+        ls -la "$WORKSPACE"
 
-          if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
-            echo "TEST_GITLEAKS enabled: creating fake secret file (NOT committed)"
-            cat > .gitleaks_test_secret.txt <<'EOF'
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+        if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
+          echo "TEST_GITLEAKS enabled: creating fake secret file (NOT committed)"
+          cat > "$WORKSPACE/.gitleaks_test_secret.txt" <<'EOF'
+GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz1234
 EOF
+          echo "Created:"
+          ls -la "$WORKSPACE/.gitleaks_test_secret.txt"
+        fi
+
+        set +e
+        docker run --rm \
+          -v "$WORKSPACE:/repo" -w /repo \
+          zricethezav/gitleaks:latest \
+          detect --source /repo --no-git --verbose
+        rc=$?
+        set -e
+
+        rm -f "$WORKSPACE/.gitleaks_test_secret.txt" || true
+
+        if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
+          if [ $rc -ne 0 ]; then
+            echo "OK: gitleaks detected the fake secret (as expected)."
+            exit 0
+          else
+            echo "ERROR: gitleaks did NOT detect the fake secret."
+            exit 1
           fi
+        fi
 
-          set +e
-          docker run --rm \
-            -v "$WORKSPACE:/repo" -w /repo \
-            zricethezav/gitleaks:latest \
-            detect --source /repo --no-git --verbose
-          rc=$?
-          set -e
-
-          rm -f .gitleaks_test_secret.txt || true
-
-          if [ "${TEST_GITLEAKS}" = "true" ]; then
-            if [ $rc -ne 0 ]; then
-              echo "OK: gitleaks detected the fake secret (as expected)."
-              exit 0
-            else
-              echo "ERROR: gitleaks did NOT detect the fake secret."
-              exit 1
-            fi
-          fi
-
-          exit $rc
-        '''
-      }
+        exit $rc
+      '''
     }
+  }
+
+  
 
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
@@ -143,23 +149,24 @@ EOF
           set -eux
           mkdir -p target/site
           cat > target/site/index.html <<'EOF'
-          <html>
-            <head><meta charset="utf-8"><title>Vulnado CI Report</title></head>
-            <body style="font-family: Arial;">
-              <h1>Vulnado CI Report</h1>
-              <ul>
-                <li>Build: #${BUILD_NUMBER}</li>
-                <li>Job: ${JOB_NAME}</li>
-                <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
-                <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
-              </ul>
-              <p>JUnit results смотри во вкладке Tests.</p>
-            </body>
-          </html>
+    <html>
+      <head><meta charset="utf-8"><title>Vulnado CI Report</title></head>
+      <body style="font-family: Arial;">
+        <h1>Vulnado CI Report</h1>
+        <ul>
+          <li>Build: #${BUILD_NUMBER}</li>
+          <li>Job: ${JOB_NAME}</li>
+          <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
+          <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
+        </ul>
+        <p>JUnit results смотри во вкладке Tests.</p>
+      </body>
+    </html>
     EOF
         '''
       }
     }
+
     
     stage('Publish HTML report') {
       when { expression { return params.PUBLISH_HTML } }
