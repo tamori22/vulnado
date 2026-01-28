@@ -7,11 +7,23 @@ pipeline {
     disableConcurrentBuilds()
   }
 
+  parameters {
+    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: 'Запускать gitleaks (если false — пропускаем стадию)')
+    booleanParam(name: 'DEPLOY',       defaultValue: true,  description: 'Делать docker compose up + smoke-check')
+    booleanParam(name: 'CLEANUP',      defaultValue: false, description: 'После билда сделать docker compose down')
+    booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: 'Публиковать HTML-отчет (если он существует)')
+    string(name: 'VULNADO_URL_OVERRIDE', defaultValue: '', description: 'Если задано — использовать этот URL вместо VULNADO_URL')
+    string(name: 'CLIENT_URL_OVERRIDE',  defaultValue: '', description: 'Если задано — использовать этот URL вместо CLIENT_URL')
+  }
+
   environment {
     COMPOSE_PROJECT_NAME = "vulnado"
 
+    // ДЛЯ Jenkins, подключенного к сети compose: vulnado_default
     VULNADO_URL = "http://vulnado:8080"
     CLIENT_URL  = "http://client:80"
+
+    // HTML Publisher (публикуем только если реально есть файлы)
     HTML_REPORT_DIR   = "target/site"
     HTML_REPORT_INDEX = "index.html"
     HTML_REPORT_NAME  = "Project HTML Report"
@@ -39,10 +51,10 @@ pipeline {
     }
 
     stage('Gitleaks') {
+      when { expression { return params.RUN_GITLEAKS } }
       steps {
         sh '''
           set -eux
-          # Реальный скан файлов в workspace (не git-история)
           docker run --rm \
             -v "$PWD:/repo" -w /repo \
             zricethezav/gitleaks:latest \
@@ -71,6 +83,7 @@ pipeline {
     }
 
     stage('Publish HTML report') {
+      when { expression { return params.PUBLISH_HTML } }
       steps {
         script {
           def reportPath = "${env.HTML_REPORT_DIR}/${env.HTML_REPORT_INDEX}"
@@ -91,6 +104,7 @@ pipeline {
     }
 
     stage('Compose Deploy') {
+      when { expression { return params.DEPLOY } }
       steps {
         sh '''
           set -eux
@@ -102,9 +116,13 @@ pipeline {
     }
 
     stage('Smoke check') {
+      when { expression { return params.DEPLOY } }
       steps {
         sh '''
           set -eux
+
+          VURL="${VULNADO_URL_OVERRIDE:-$VULNADO_URL}"
+          CURL="${CLIENT_URL_OVERRIDE:-$CLIENT_URL}"
 
           wait_url () {
             url="$1"
@@ -122,8 +140,8 @@ pipeline {
             return 1
           }
 
-          wait_url "$VULNADO_URL" "vulnado"
-          wait_url "$CLIENT_URL"  "client"
+          wait_url "$VURL" "vulnado"
+          wait_url "$CURL" "client"
         '''
       }
     }
@@ -140,5 +158,16 @@ pipeline {
         docker compose logs --tail=200 || true
       '''
     }
+
+    always {
+      script {
+        if (params.CLEANUP) {
+          sh 'docker compose down --remove-orphans || true'
+        } else {
+          echo "CLEANUP=false, оставляю compose окружение поднятым."
+        }
+      }
+    }
   }
 }
+
