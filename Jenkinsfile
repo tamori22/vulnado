@@ -62,6 +62,18 @@ pipeline {
         '''
       }
     }
+    
+  stage('Semgrep') {
+    steps {
+      sh '''
+        set -eux
+        docker run --rm \
+          -v "$PWD:/src" -w /src \
+          returntocorp/semgrep \
+          semgrep scan --config=auto
+      '''
+    }
+  }
 
     stage('Build & Test (Maven)') {
       steps {
