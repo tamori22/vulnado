@@ -8,9 +8,9 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: 'gitleaks ')
-    booleanParam(name: 'TEST_GITLEAKS', defaultValue: false, description: 'Создать фейковый секрет')
-    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true,  description: 'semgrep')
+    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true,  description: '')
+    booleanParam(name: 'TEST_GITLEAKS', defaultValue: false, description: '')
+    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true,  description: '')
     booleanParam(name: 'GITLEAKS_BLOCKING', defaultValue: true, description: '')
     booleanParam(name: 'SEMGREP_BLOCKING',  defaultValue: true, description: '')
     booleanParam(name: 'DEPLOY',       defaultValue: true,  description: '')
@@ -62,18 +62,21 @@ pipeline {
         '''
       }
     }
+
     stage('Gitleaks') {
       when { expression { return params.RUN_GITLEAKS } }
       steps {
         sh '''
           set -eux
 
+          # (опционально) тестовый секрет
           if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
             cat > "$WORKSPACE/.gitleaks_test_secret.txt" <<'EOF'
 GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz1234
 EOF
           fi
 
+          # gitleaks: всегда генерим json отчёт
           set +e
           docker run --rm \
             -v "$WORKSPACE:/repo" -w /repo \
@@ -85,6 +88,7 @@ EOF
 
           rm -f "$WORKSPACE/.gitleaks_test_secret.txt" || true
 
+          # TEST_GITLEAKS: ожидаем, что gitleaks "упадёт"
           if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
             if [ $rc -ne 0 ]; then
               echo "OK: gitleaks detected the fake secret (as expected)."
@@ -95,6 +99,7 @@ EOF
             fi
           fi
 
+          # Blocking vs Report-only
           if [ "${GITLEAKS_BLOCKING:-true}" = "true" ]; then
             exit $rc
           else
@@ -104,7 +109,6 @@ EOF
         '''
       }
     }
-
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
@@ -153,20 +157,21 @@ EOF
           set -eux
           mkdir -p target/site
           cat > target/site/index.html <<'EOF'
-    <html>
-      <head><meta charset="utf-8"><title>Vulnado CI Report</title></head>
-      <body style="font-family: Arial;">
-        <h1>Vulnado CI Report</h1>
-        <ul>
-          <li>Build: #${BUILD_NUMBER}</li>
-          <li>Job: ${JOB_NAME}</li>
-          <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
-          <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
-        </ul>
-        <p>JUnit results смотри во вкладке Tests.</p>
-      </body>
-    </html>
-    EOF
+<html>
+  <head><meta charset="utf-8"><title>Vulnado CI Report</title></head>
+  <body style="font-family: Arial;">
+    <h1>Vulnado CI Report</h1>
+    <ul>
+      <li>Build: #${BUILD_NUMBER}</li>
+      <li>Job: ${JOB_NAME}</li>
+      <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
+      <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
+    </ul>
+    <p>Скачай JSON отчёты в “Артефакты сборки”.</p>
+    <p>JUnit результаты смотри во вкладке Tests.</p>
+  </body>
+</html>
+EOF
         '''
       }
     }
@@ -242,14 +247,15 @@ EOF
     }
 
     always {
-      archiveArtifacts artifacts: 'target/**/*.jar,target/site/**,gitleaks-report.json,semgrep-report.json',
-                     fingerprint: true,
-                     allowEmptyArchive: true
+      archiveArtifacts artifacts: 'gitleaks-report.json,semgrep-report.json,target/site/**,target/**/*.jar',
+                       fingerprint: true,
+                       allowEmptyArchive: true
+
       script {
         if (params.CLEANUP) {
           sh 'docker compose down --remove-orphans || true'
         } else {
-          echo "CLEANUP=false."
+          echo "CLEANUP=false, оставляю compose окружение поднятым."
         }
       }
     }
