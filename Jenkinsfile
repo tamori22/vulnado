@@ -18,12 +18,8 @@ pipeline {
 
   environment {
     COMPOSE_PROJECT_NAME = "vulnado"
-
-    // ДЛЯ Jenkins, подключенного к сети compose: vulnado_default
     VULNADO_URL = "http://vulnado:8080"
     CLIENT_URL  = "http://client:80"
-
-    // HTML Publisher (публикуем только если реально есть файлы)
     HTML_REPORT_DIR   = "target/site"
     HTML_REPORT_INDEX = "index.html"
     HTML_REPORT_NAME  = "Project HTML Report"
@@ -62,18 +58,22 @@ pipeline {
         '''
       }
     }
-    
-  stage('Semgrep') {
-    steps {
-      sh '''
-        set -eux
-        docker run --rm \
-          -v "$PWD:/src" -w /src \
-          returntocorp/semgrep \
-          semgrep scan --config=auto
-      '''
-    }
+
+stage('Semgrep') {
+  steps {
+    sh '''
+      set -eux
+      echo "WORKSPACE=$WORKSPACE"
+      ls -la "$WORKSPACE"
+
+      docker run --rm \
+        -v "$WORKSPACE:/src" \
+        -w /src \
+        returntocorp/semgrep:latest \
+        semgrep scan --config=auto .
+    '''
   }
+}
 
     stage('Build & Test (Maven)') {
       steps {
