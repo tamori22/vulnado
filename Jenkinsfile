@@ -69,7 +69,7 @@ pipeline {
         sh '''
           set -eux
 
-          if [ "${TEST_GITLEAKS}" = "true" ]; then
+          if [ "${TEST_GITLEAKS:-false}" = "true" ]; then
             echo "TEST_GITLEAKS enabled: creating fake secret file (NOT committed)"
             cat > .gitleaks_test_secret.txt <<'EOF'
 AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
