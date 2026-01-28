@@ -9,15 +9,19 @@ pipeline {
 
   environment {
     COMPOSE_PROJECT_NAME = "vulnado"
+
     VULNADO_URL = "http://vulnado:8080"
     CLIENT_URL  = "http://client:80"
+    HTML_REPORT_DIR   = "target/site"
+    HTML_REPORT_INDEX = "index.html"
+    HTML_REPORT_NAME  = "Project HTML Report"
   }
 
   stages {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'git rev-parse --short HEAD'
+        sh 'git rev-parse --short HEAD || true'
       }
     }
 
@@ -38,7 +42,11 @@ pipeline {
       steps {
         sh '''
           set -eux
-          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:latest detect --source . --verbose
+          # Реальный скан файлов в workspace (не git-история)
+          docker run --rm \
+            -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:latest \
+            detect --source /repo --no-git --verbose
         '''
       }
     }
@@ -58,6 +66,26 @@ pipeline {
       post {
         always {
           junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+        }
+      }
+    }
+
+    stage('Publish HTML report') {
+      steps {
+        script {
+          def reportPath = "${env.HTML_REPORT_DIR}/${env.HTML_REPORT_INDEX}"
+          if (fileExists(reportPath)) {
+            publishHTML(target: [
+              allowMissing: false,
+              alwaysLinkToLastBuild: true,
+              keepAll: true,
+              reportDir: env.HTML_REPORT_DIR,
+              reportFiles: env.HTML_REPORT_INDEX,
+              reportName: env.HTML_REPORT_NAME
+            ])
+          } else {
+            echo "HTML report not found at ${reportPath}. Skipping HTML publish."
+          }
         }
       }
     }
