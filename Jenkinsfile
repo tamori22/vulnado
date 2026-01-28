@@ -86,6 +86,12 @@ EOF
           rc=$?
           set -e
 
+          echo "=== AFTER GITLEAKS ==="
+          echo "PWD=$(pwd)"
+          echo "WORKSPACE=$WORKSPACE"
+          ls -la "$WORKSPACE" || true
+          find "$WORKSPACE" -maxdepth 3 -name '*gitleaks*.json' -print -exec ls -la {} \\; || true
+
           rm -f "$WORKSPACE/.gitleaks_test_secret.txt" || true
 
           # TEST_GITLEAKS: ожидаем, что gitleaks "упадёт"
@@ -109,6 +115,7 @@ EOF
         '''
       }
     }
+
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
@@ -121,6 +128,12 @@ EOF
             semgrep scan --config=auto --json -o semgrep-report.json .
           rc=$?
           set -e
+
+          echo "=== AFTER SEMGREP ==="
+          echo "PWD=$(pwd)"
+          echo "WORKSPACE=$WORKSPACE"
+          ls -la "$WORKSPACE" || true
+          find "$WORKSPACE" -maxdepth 3 -name '*semgrep*.json' -print -exec ls -la {} \\; || true
 
           if [ "${SEMGREP_BLOCKING:-true}" = "true" ]; then
             exit $rc
@@ -255,11 +268,10 @@ EOF
         if (params.CLEANUP) {
           sh 'docker compose down --remove-orphans || true'
         } else {
-          echo "CLEANUP=false, оставляю compose окружение поднятым."
+          echo "CLEANUP=false."
         }
       }
     }
   }
 }
-
 
