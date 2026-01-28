@@ -16,9 +16,11 @@ pipeline {
     booleanParam(name: 'SEMGREP_BLOCKING',  defaultValue: true, description: '')
     booleanParam(name: 'DEPLOY',       defaultValue: true,  description: '')
     booleanParam(name: 'CLEANUP',      defaultValue: false, description: '')
-    booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: '')
+    booleanParam(name: 'PUBLISH_HTML', defaultValue: true,  description: 'Requires HTML Publisher plugin (disabled in this Jenkinsfile)')
     string(name: 'VULNADO_URL_OVERRIDE', defaultValue: '', description: '')
     string(name: 'CLIENT_URL_OVERRIDE',  defaultValue: '', description: '')
+    string(name: 'SMOKE_VULNADO_PATH', defaultValue: '/', description: 'Path to check inside vulnado container URL, e.g. /, /login, /actuator/health')
+    string(name: 'SMOKE_CLIENT_PATH',  defaultValue: '/', description: 'Path to check inside client container URL')
   }
 
   environment {
@@ -117,10 +119,11 @@ EOF
         '''
       }
     }
+
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
-      script {
+        script {
           def rc = 0
           try {
             semgrepCi()
@@ -144,7 +147,6 @@ EOF
         '''
       }
     }
-
 
     stage('Build & Test (Maven)') {
       steps {
@@ -190,20 +192,6 @@ EOF
       }
     }
 
-    stage('Publish HTML report') {
-      when { expression { return params.PUBLISH_HTML } }
-      steps {
-        publishHTML(target: [
-          allowMissing: true,
-          alwaysLinkToLastBuild: true,
-          keepAll: true,
-          reportDir: 'target/site',
-          reportFiles: 'index.html',
-          reportName: 'CI HTML Report'
-        ])
-      }
-    }
-
     stage('Compose Deploy') {
       when { expression { return params.DEPLOY } }
       steps {
@@ -216,22 +204,35 @@ EOF
       }
     }
 
-    stage('Smoke check') {
+    stage('Smoke check (from compose network)') {
       when { expression { return params.DEPLOY } }
       steps {
         sh '''
           set -eux
 
+          # ВАЖНО: проверяем ИЗ контейнера client, чтобы гарантировать DNS/сеть compose.
           VURL="${VULNADO_URL_OVERRIDE:-$VULNADO_URL}"
           CURL="${CLIENT_URL_OVERRIDE:-$CLIENT_URL}"
 
-          wait_url () {
+          VP="${SMOKE_VULNADO_PATH:-/}"
+          CP="${SMOKE_CLIENT_PATH:-/}"
+
+          echo "VURL=$VURL"
+          echo "CURL=$CURL"
+          echo "SMOKE_VULNADO_PATH=$VP"
+          echo "SMOKE_CLIENT_PATH=$CP"
+
+          wait_url_in_client () {
             url="$1"
             name="$2"
+
+            echo "=== [$name] network diagnostics (from client container) ==="
+            docker compose exec -T client sh -lc 'getent hosts vulnado || true; getent hosts client || true; (nc -vz vulnado 8080 || true); (nc -vz client 80 || true)' || true
+
             for i in $(seq 1 40); do
-              code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)
+              code="$(docker compose exec -T client sh -lc "curl -s -o /dev/null -w '%{http_code}' '$url' || true" | tr -d '\\r')"
               echo "[$name] try=$i code=$code url=$url"
-              if [ "$code" != "000" ]; then
+              if [ "$code" != "000" ] && [ -n "$code" ]; then
                 echo "[$name] OK (http_code=$code)"
                 return 0
               fi
@@ -241,8 +242,8 @@ EOF
             return 1
           }
 
-          wait_url "$VURL" "vulnado"
-          wait_url "$CURL" "client"
+          wait_url_in_client "${VURL}${VP}" "vulnado"
+          wait_url_in_client "${CURL}${CP}" "client"
         '''
       }
     }
@@ -275,4 +276,5 @@ EOF
     }
   }
 }
+
 
