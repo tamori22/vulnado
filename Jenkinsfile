@@ -20,6 +20,8 @@ pipeline {
     SEMGREP_APP_TOKEN = credentials('semgrep-app-token')
   }
 
+  stages {
+
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
@@ -124,7 +126,3 @@ pipeline {
     }
   }
 }
-
-
-
-
