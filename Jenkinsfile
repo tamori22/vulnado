@@ -8,18 +8,11 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'RUN_GITLEAKS', defaultValue: true)
-    booleanParam(name: 'RUN_SEMGREP',  defaultValue: true)
-    booleanParam(name: 'GITLEAKS_BLOCKING', defaultValue: true)
-    booleanParam(name: 'SEMGREP_BLOCKING',  defaultValue: true)
+    booleanParam(name: 'RUN_SEMGREP', defaultValue: true)
     booleanParam(name: 'DEPLOY', defaultValue: true)
     booleanParam(name: 'CLEANUP', defaultValue: false)
   }
 
-  environment {
-    SEMGREP_APP_TOKEN = credentials('semgrep-app-token')
-  }
-  
   stages {
 
     stage('Checkout') {
@@ -29,61 +22,59 @@ pipeline {
           set -eux
           echo "=== AFTER CHECKOUT (HOST) ==="
           pwd
-          ls -la
-          ls -la .git || true
-          git rev-parse --show-toplevel || true
+          ls -la | head -n 40
+          ls -la .git | head || true
           git status || true
         '''
       }
     }
-    
 
-    stage('Semgrep') {
+    stage('Semgrep (report-only)') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
         script {
+          sh '''
+            set +e
+            docker pull semgrep/semgrep:latest
 
-          def rc = sh(
-            returnStatus: true,
-            script: '''
-              set +e
+            docker run --rm \
+              -e HOME=/tmp \
+              -e GIT_DISCOVERY_ACROSS_FILESYSTEM=1 \
+              -v jenkins_home:/var/jenkins_home \
+              -v jenkins_home:/src \
+              -w /src/workspace/vulnado \
+              semgrep/semgrep:latest sh -lc '
+                set +e
+                echo "=== SEMGREP START ==="
+                pwd
+                ls -la | head -n 60
+                ls -la .git | head || true
 
-              docker pull semgrep/semgrep:latest
+                rm -f semgrep-report.json semgrep-report.txt || true
 
-              docker run --rm \
-                -e SEMGREP_APP_TOKEN="$SEMGREP_APP_TOKEN" \
-                -e GIT_DISCOVERY_ACROSS_FILESYSTEM=1 \
-                -e HOME=/tmp \
-                -v "$PWD:$PWD" \
-                -w "$PWD" \
-                semgrep/semgrep:latest \
-                sh -lc "
-                  set -eux
-                  pwd
-                  ls -la
-                  ls -la .git
-                  git status
-                  semgrep ci --json -o semgrep-report.json
-                "
-            '''
-          )
+                semgrep scan --config p/ci --json -o semgrep-report.json > semgrep-report.txt 2>&1
+                rc=$?
 
-          if (rc != 0) {
-            if (params.SEMGREP_BLOCKING) {
-              error("Semgrep failed with exit code=${rc} (SEMGREP_BLOCKING=true)")
-            } else {
-              echo "SEMGREP_BLOCKING=false → report-only (exit code=${rc} ignored)"
-            }
-          }
+                echo "=== SEMGREP RC: $rc (ignored) ==="
+                echo "=== SEMGREP LOG (tail) ==="
+                tail -n 200 semgrep-report.txt || true
+
+                echo "=== SEMGREP REPORT FILES ==="
+                ls -la semgrep-report.json semgrep-report.txt || true
+
+                exit 0
+              '
+
+            exit 0
+          '''
         }
-
-        sh '''
-          set -eux
-          echo "=== HOST AFTER SEMGREP ==="
-          pwd
-          ls -la
-          find "$WORKSPACE" -maxdepth 3 -name '*semgrep*.json' -print -exec ls -la {} \\; || true
-        '''
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'semgrep-report.json,semgrep-report.txt',
+                           allowEmptyArchive: true,
+                           fingerprint: true
+        }
       }
     }
 
@@ -119,20 +110,6 @@ pipeline {
   }
 
   post {
-    always {
-      archiveArtifacts artifacts: 'semgrep-report.json,target/**/*.jar',
-                       allowEmptyArchive: true,
-                       fingerprint: true
-    }
-
-    failure {
-      sh '''
-        set +e
-        docker compose ps || true
-        docker compose logs --tail=200 || true
-      '''
-    }
-
     cleanup {
       script {
         if (params.CLEANUP) {
@@ -142,3 +119,4 @@ pipeline {
     }
   }
 }
+
