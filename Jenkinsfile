@@ -124,15 +124,34 @@ EOF
       when { expression { return params.RUN_SEMGREP } }
       steps {
         script {
-          def rc = 0
-          try {
-            semgrepCi()
-          } catch (e) {
-            rc = 1
+          def rc = sh(
+            script: '''
+              set +e
+              docker pull semgrep/semgrep:latest
+
+              docker run --rm \
+                -e SEMGREP_APP_TOKEN="$SEMGREP_APP_TOKEN" \
+                -e GIT_DISCOVERY_ACROSS_FILESYSTEM=1 \
+                -e HOME=/tmp \
+                -v "$WORKSPACE:$WORKSPACE" \
+                -w "$WORKSPACE" \
+                semgrep/semgrep:latest sh -lc '
+                  # на всякий случай (часто нужно в контейнерах)
+                  git config --global --add safe.directory "$PWD" || true
+                  # "как в статье"
+                  semgrep ci --json -o semgrep-report.json
+                '
+              rc=$?
+              exit $rc
+            ''',
+            returnStatus: true
+          )
+
+          if (rc != 0) {
             if (params.SEMGREP_BLOCKING) {
-              throw e
+              error("Semgrep failed with exit code=${rc} (SEMGREP_BLOCKING=true)")
             } else {
-              echo "SEMGREP_BLOCKING=false => report-only (ignore error): ${e}"
+              echo "SEMGREP_BLOCKING=false => report-only (ignore exit code=${rc})"
             }
           }
         }
@@ -183,8 +202,8 @@ EOF
       <li>Branch: $(git rev-parse --abbrev-ref HEAD || echo unknown)</li>
       <li>Commit: $(git rev-parse --short HEAD || echo unknown)</li>
     </ul>
-    <p>Скачай JSON отчёты в “Артефакты сборки”.</p>
-    <p>JUnit результаты смотри во вкладке Tests.</p>
+    <p>.</p>
+    <p>JUnit .</p>
   </body>
 </html>
 EOF
@@ -209,23 +228,17 @@ EOF
       steps {
         sh '''
           set -eux
-
-          # ВАЖНО: проверяем ИЗ контейнера client, чтобы гарантировать DNS/сеть compose.
           VURL="${VULNADO_URL_OVERRIDE:-$VULNADO_URL}"
           CURL="${CLIENT_URL_OVERRIDE:-$CLIENT_URL}"
-
           VP="${SMOKE_VULNADO_PATH:-/}"
           CP="${SMOKE_CLIENT_PATH:-/}"
-
           echo "VURL=$VURL"
           echo "CURL=$CURL"
           echo "SMOKE_VULNADO_PATH=$VP"
           echo "SMOKE_CLIENT_PATH=$CP"
-
           wait_url_in_client () {
             url="$1"
             name="$2"
-
             echo "=== [$name] network diagnostics (from client container) ==="
             docker compose exec -T client sh -lc 'getent hosts vulnado || true; getent hosts client || true; (nc -vz vulnado 8080 || true); (nc -vz client 80 || true)' || true
 
@@ -276,5 +289,6 @@ EOF
     }
   }
 }
+
 
 
