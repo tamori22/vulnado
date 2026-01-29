@@ -19,8 +19,24 @@ pipeline {
   environment {
     SEMGREP_APP_TOKEN = credentials('semgrep-app-token')
   }
-
+  
   stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh '''
+          set -eux
+          echo "=== AFTER CHECKOUT (HOST) ==="
+          pwd
+          ls -la
+          ls -la .git || true
+          git rev-parse --show-toplevel || true
+          git status || true
+        '''
+      }
+    }
+    
 
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
