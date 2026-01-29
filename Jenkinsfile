@@ -20,21 +20,6 @@ pipeline {
     SEMGREP_APP_TOKEN = credentials('semgrep-app-token')
   }
 
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-        sh '''
-          set -eux
-          pwd
-          ls -la
-          git status
-          git rev-parse --show-toplevel
-        '''
-      }
-    }
-
     stage('Semgrep') {
       when { expression { return params.RUN_SEMGREP } }
       steps {
