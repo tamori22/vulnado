@@ -52,14 +52,14 @@ pipeline {
                   --report-path gitleaks-report.json
 
               rc=$?
-              echo "gitleaks_rc=$rc" > gitleaks-summary.txt
+              echo "rc=$rc" > gitleaks-summary.txt
               ls -la gitleaks-report.json gitleaks-summary.txt || true
               exit $rc
             '''
           )
 
-          def rcLine = sh(returnStdout: true, script: "cat gitleaks-summary.txt 2>/dev/null || true").trim()
-          echo "Gitleaks: ${rcLine}"
+          def sum = sh(returnStdout: true, script: "cat gitleaks-summary.txt 2>/dev/null || true").trim()
+          echo "Gitleaks summary: ${sum}"
 
           if (params.GITLEAKS_BLOCKING && rc != 0) {
             error("Gitleaks failed (exit=${rc}, GITLEAKS_BLOCKING=true)")
@@ -102,11 +102,11 @@ pipeline {
 
                   rm -f semgrep-report.json semgrep-report.txt semgrep-summary.txt || true
 
-                  # JSON гарантируем через stdout
+                  # JSON делаем через stdout (так надежнее)
                   semgrep scan --config p/ci --json > semgrep-report.json 2> semgrep-report.txt
                   rc=$?
 
-                  findings=$(python - <<'PY'
+                  findings=$(python - <<'"'"'PY'"'"'
 import json
 try:
     with open("semgrep-report.json","r",encoding="utf-8") as f:
@@ -125,7 +125,7 @@ PY
                   echo "=== SEMGREP FILES ==="
                   ls -la semgrep-report.json semgrep-report.txt semgrep-summary.txt || true
 
-                  # Возвращаем реальный rc наружу — Groovy решает blocking/report-only
+                  # Возвращаем реальный rc наружу
                   exit $rc
                 '
             '''
@@ -134,22 +134,21 @@ PY
           def sum = sh(returnStdout: true, script: "cat semgrep-summary.txt 2>/dev/null || true").trim()
           echo "Semgrep summary: ${sum}"
 
-          def findingsStr = sh(
-            returnStdout: true,
-            script: "awk '{for(i=1;i<=NF;i++) if($i ~ /^findings=/) {sub(\"findings=\",\"\",$i); print $i}}' semgrep-summary.txt 2>/dev/null || true"
-          ).trim()
-
           int findings = 0
-          if (findingsStr?.isInteger()) {
-            findings = findingsStr.toInteger()
+          def m = (sum =~ /findings=(\d+)/)
+          if (m.find()) {
+            findings = (m.group(1) as int)
+          } else {
+            echo "Could not parse findings from semgrep-summary.txt, treating as 0"
           }
 
           echo "Semgrep exit=${rc}, findings=${findings}"
-
           if (params.SEMGREP_BLOCKING && findings > 0) {
             error("Semgrep found ${findings} findings (SEMGREP_BLOCKING=true)")
-          } else if (!params.SEMGREP_BLOCKING) {
-            echo "SEMGREP_BLOCKING=false → report-only"
+          } else if (!params.SEMGREP_BLOCKING && findings > 0) {
+            echo "SEMGREP_BLOCKING=false → findings present (${findings}), but not blocking"
+          } else {
+            echo "Semgrep: no findings (or parsing failed)."
           }
         }
       }
