@@ -51,26 +51,16 @@ pipeline {
                 -e SEMGREP_APP_TOKEN="$SEMGREP_APP_TOKEN" \
                 -e GIT_DISCOVERY_ACROSS_FILESYSTEM=1 \
                 -e HOME=/tmp \
-                -v "$WORKSPACE:$WORKSPACE" \
-                -w "$WORKSPACE" \
+                -v "$PWD:$PWD" \
+                -w "$PWD" \
                 semgrep/semgrep:latest \
                 sh -lc "
                   set -eux
-                  echo '=== SEMGREP CONTAINER DEBUG ==='
-                  echo PWD=\\$(pwd)
+                  pwd
                   ls -la
-                  ls -la .git || true
-                  git --version
+                  ls -la .git
                   git status
-                  git rev-parse --show-toplevel
-
-                  git config --global --add safe.directory \\$(pwd) || true
-
-                  echo '=== RUN SEMGREP ==='
                   semgrep ci --json -o semgrep-report.json
-
-                  echo '=== AFTER SEMGREP ==='
-                  ls -la semgrep-report.json
                 "
             '''
           )
